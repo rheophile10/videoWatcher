@@ -2,9 +2,9 @@ from pathlib import Path
 import pytest
 import numpy as np
 
-from db import connect, upsert
+from watcher.db import db, upsert
 
-DB_PATH = Path(__file__).parent / "test_watcher.db"
+TEST_DB_PATH = Path(__file__).parent / "test_watcher.db"
 
 
 @pytest.fixture(autouse=True, scope="function")
@@ -15,30 +15,21 @@ def cleanup():
 
     gc.collect()
     time.sleep(0.1)  # let Windows release file lock
-    if DB_PATH.exists():
+    if TEST_DB_PATH.exists():
         try:
-            DB_PATH.unlink(missing_ok=True)
+            TEST_DB_PATH.unlink(missing_ok=True)
         except PermissionError:
             pass  # best effort
 
 
 @pytest.fixture
 def conn():
-    # Patch DB_PATH
-    from db import DB_PATH as orig
-    import db
-
-    db.DB_PATH = DB_PATH
-
-    with connect() as c:
+    with db(TEST_DB_PATH) as c:
         yield c
-
-    # Restore
-    db.DB_PATH = orig
 
 
 def test_connect_creates_db(conn):
-    assert DB_PATH.exists()
+    assert TEST_DB_PATH.exists()
     tables = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
     ).fetchall()
@@ -73,7 +64,6 @@ def test_vector_search(conn):
     )
     conn.commit()
 
-    query_vec = zero_vec
     results = conn.execute(
         """
         SELECT 

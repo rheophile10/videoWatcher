@@ -26,7 +26,6 @@ import sqlite_vec
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Tuple, Any, Generator
-import threading
 
 # ----------------------------------------------------------------------
 # Paths & Global Cache
@@ -41,7 +40,7 @@ sql_cache: Dict[str, Dict[str, Any]] = {}
 # ----------------------------------------------------------------------
 # 1. SQL Parsing
 # ----------------------------------------------------------------------
-def init_sql_cache() -> Dict[str, Dict[str, Any]]:
+def _init_sql_cache() -> Dict[str, Dict[str, Any]]:
     """Parse `sql.sql` → cache of table metadata."""
     if sql_cache:
         return sql_cache
@@ -54,7 +53,7 @@ def init_sql_cache() -> Dict[str, Dict[str, Any]]:
     current_block: str | None = None
     buffer: List[str] = []
 
-    block_pat = re.compile(r"--\s*(create|upsert|delete)\s*$", re.I)
+    block_pat = re.compile(r"--\s*([a-z_]+)\s*$", re.I)
     attr_pat = re.compile(r"--\s*(\w+):\s*(.+)", re.I)
 
     def flush() -> None:
@@ -74,7 +73,7 @@ def init_sql_cache() -> Dict[str, Dict[str, Any]]:
             if key == "table":
                 flush()
                 current_table = val
-                tables[current_table] = {"create": None, "upsert": None, "delete": None}
+                tables[current_table] = {}
                 current_block = None
             elif current_table:
                 tables[current_table][key] = val
@@ -100,7 +99,7 @@ def init_sql_cache() -> Dict[str, Dict[str, Any]]:
 # ----------------------------------------------------------------------
 def _init_db(conn: sqlite3.Connection, seed: bool = True) -> None:
     """Create tables and optionally seed from CSV."""
-    schema = init_sql_cache()
+    schema = _init_sql_cache()
     for table, info in schema.items():
         if info.get("create"):
             conn.executescript(info["create"])
@@ -117,29 +116,64 @@ def _seed(conn: sqlite3.Connection, table: str, seed_file: str) -> None:
         reader = csv.DictReader(f)
         rows = [tuple(row[col] for col in reader.fieldnames) for row in reader]
         if rows:
-            _execute_statement(conn, table, "upsert", rows)
+            upsert(conn, table, rows)
 
 
 # ----------------------------------------------------------------------
 # 3. CRUD Helpers
 # ----------------------------------------------------------------------
-def _execute_statement(
+def _get_statement(table: str, stmt_name: str) -> str:
+    stmt = sql_cache.get(table, {}).get(stmt_name)
+    if not stmt:
+        raise ValueError(f"No {stmt_name} statement for table '{table}'")
+    return stmt
+
+
+def s_proc(
     conn: sqlite3.Connection, table: str, stmt_type: str, rows: List[Tuple]
 ) -> None:
-    stmt = sql_cache.get(table, {}).get(stmt_type)
-    if not stmt:
-        raise ValueError(f"No {stmt_type} statement for table '{table}'")
+    """Execute a statement for multiple rows."""
+    stmt = _get_statement(table, stmt_type)
     conn.executemany(stmt, rows)
+
+
+def _query_statement(
+    conn: sqlite3.Connection, stmt: str, params: Tuple = ()
+) -> List[sqlite3.Row]:
+    """Execute a query and return all results."""
+    cur = conn.execute(stmt, params)
+    return cur.fetchall()
+
+
+def p_query(
+    conn: sqlite3.Connection, table: str, stmt: str, params: Tuple
+) -> List[sqlite3.Row]:
+    """Parameterized query."""
+    stmt = sql_cache.get(table, {}).get(stmt)
+    return _query_statement(conn, stmt, params)
 
 
 def upsert(conn: sqlite3.Connection, table: str, rows: List[Tuple]) -> None:
     """Insert or update rows."""
-    _execute_statement(conn, table, "upsert", rows)
+    s_proc(conn, table, "upsert", rows)
 
 
 def delete(conn: sqlite3.Connection, table: str, rows: List[Tuple]) -> None:
     """Delete rows by ID."""
-    _execute_statement(conn, table, "delete", rows)
+    s_proc(conn, table, "delete", rows)
+
+
+def log(
+    conn: sqlite3.Connection,
+    log_type: str,
+    log_message: str,
+    source_id: int,
+    video_id: int | None = None,
+) -> None:
+    """make a log"""
+    if log_type not in ["info", "warning", "error"]:
+        raise ValueError(f"Invalid log type: {log_type}")
+    s_proc(conn, "logs", "make_log", [(source_id, video_id, log_type, log_message)])
 
 
 # ----------------------------------------------------------------------
@@ -148,14 +182,14 @@ def delete(conn: sqlite3.Connection, table: str, rows: List[Tuple]) -> None:
 
 
 @contextmanager
-def connect() -> Generator[sqlite3.Connection, None, None]:
+def _connect(db_path: Path = DB_PATH) -> Generator[sqlite3.Connection, None, None]:
     """
     Context manager for DB connection.
     - Auto-creates DB on first use
     - Enables WAL, foreign_keys, row_factory
     - Guarantees commit/rollback/close
     """
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
     conn.enable_load_extension(True)
@@ -173,16 +207,22 @@ def connect() -> Generator[sqlite3.Connection, None, None]:
         conn.close()
 
 
-def _ensure_db_exists() -> None:
+def _ensure_db_exists(db_path: Path = DB_PATH) -> None:
     """Create DB file + schema + vec + seeds if missing."""
-    if DB_PATH.exists() and DB_PATH.stat().st_size > 0:
+    if db_path.exists() and db_path.stat().st_size > 0:
         return
 
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with connect() as conn:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with _connect(db_path) as conn:
         _init_db(conn, seed=True)
 
 
-_ensure_db_exists()
+@contextmanager
+def db(db_path: Path = DB_PATH) -> Generator[sqlite3.Connection, None, None]:
+    """Get a DB connection, ensuring DB exists."""
+    _ensure_db_exists(db_path)
+    with _connect(db_path) as conn:
+        yield conn
 
-__all__ = ["connect", "upsert", "delete"]
+
+__all__ = ["db", "upsert", "delete", "s_proc", "p_query", "log", "DB_PATH"]
