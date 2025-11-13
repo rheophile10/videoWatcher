@@ -14,6 +14,7 @@
 > - No SQL validation
 > - Seed assumes CSV column order = upsert order
 > - No migrations
+> - No concurrency handling (beyond SQLite WAL)
 >
 > Use for prototyping or embedded apps. For production, prefer `alembic` + per-table `.sql` files.
 """
@@ -25,6 +26,7 @@ import sqlite_vec
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Tuple, Any, Generator
+import threading
 
 # ----------------------------------------------------------------------
 # Paths & Global Cache
@@ -145,26 +147,6 @@ def delete(conn: sqlite3.Connection, table: str, rows: List[Tuple]) -> None:
 # ----------------------------------------------------------------------
 
 
-def _ensure_db_exists() -> None:
-    """Create DB file + schema + vec + seeds if missing."""
-    if DB_PATH.exists() and DB_PATH.stat().st_size > 0:
-        return
-
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-
-    conn.execute("PRAGMA foreign_keys = ON;")
-    conn.execute("PRAGMA journal_mode = WAL;")
-
-    conn.enable_load_extension(True)
-    sqlite_vec.load(conn)
-    conn.enable_load_extension(False)
-
-    conn.row_factory = sqlite3.Row
-    _init_db(conn, seed=True)
-    conn.close()
-
-
 @contextmanager
 def connect() -> Generator[sqlite3.Connection, None, None]:
     """
@@ -173,7 +155,6 @@ def connect() -> Generator[sqlite3.Connection, None, None]:
     - Enables WAL, foreign_keys, row_factory
     - Guarantees commit/rollback/close
     """
-    _ensure_db_exists()
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
@@ -190,3 +171,18 @@ def connect() -> Generator[sqlite3.Connection, None, None]:
         raise
     finally:
         conn.close()
+
+
+def _ensure_db_exists() -> None:
+    """Create DB file + schema + vec + seeds if missing."""
+    if DB_PATH.exists() and DB_PATH.stat().st_size > 0:
+        return
+
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with connect() as conn:
+        _init_db(conn, seed=True)
+
+
+_ensure_db_exists()
+
+__all__ = ["connect", "upsert", "delete"]
