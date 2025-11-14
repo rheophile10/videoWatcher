@@ -13,3 +13,6 @@ Keeps a permanent, searchable record.
 ## Why:
 
 perpetual scrutiny of utterances of elected officials
+
+# requirements
+you need ffmpeg and it needs to be in PATH

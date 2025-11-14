@@ -1,6 +1,74 @@
 """Coordinate source scraping activities.
 
-could add more logging of scraper errors here later
+## Scraper Module Interface
+
+Each Python file in the scrapers folder must export two functions:
+
+### 1. videos_since(scraper_id: int, since: datetime) -> List[Tuple[Dict, Any]]
+
+Returns a list of tuples where each tuple contains:
+- **video_db_record**: Dict with keys for database insertion:
+    - source_id: int (the scraper_id passed in)
+    - video_url: str (unique identifier for the video)
+    - title: str (video title)
+    - published_at: str (ISO format datetime when video was published)
+    - video_file_path: str | None (local file path if already downloaded)
+- **download_args**: Any additional data needed for downloading (URLs, metadata, etc.)
+
+Example:
+```python
+def videos_since(scraper_id: int, since: datetime) -> List[Tuple[Dict, Any]]:
+    videos = fetch_videos_from_api(since)
+    result = []
+    for video in videos:
+        video_db_record = {
+            "source_id": scraper_id,
+            "video_url": video["url"],
+            "title": video["title"],
+            "published_at": video["published_at"],
+            "video_file_path": None  # Not downloaded yet
+        }
+        download_args = {"api_url": video["download_url"], "headers": video["auth"]}
+        result.append((video_db_record, download_args))
+    return result
+```
+
+### 2. download_videos(videos: List[Tuple[Dict, Any]]) -> List[Dict]
+
+Takes the output from videos_since() and downloads the videos.
+Returns a list of updated video_db_records for successfully downloaded videos.
+
+Each returned Dict must have keys for mark_downloaded:
+- video_file_path: str (local path where video was saved)
+- duration_seconds: int | None (video duration)
+- video_url: str (to identify which video was downloaded)
+
+Example:
+```python
+def download_videos(videos: List[Tuple[Dict, Any]]) -> List[Dict]:
+    successfully_downloaded = []
+    for video_db_record, download_args in videos:
+        try:
+            file_path = download_video(download_args["api_url"])
+            duration = get_video_duration(file_path)
+
+            updated_record = {
+                "video_file_path": file_path,
+                "duration_seconds": duration,
+                "video_url": video_db_record["video_url"]
+            }
+            successfully_downloaded.append(updated_record)
+        except Exception:
+            # Log error, skip this video
+            continue
+    return successfully_downloaded
+```
+
+## Data Flow
+1. videos_since() -> update_download_attempt (marks attempt in DB)
+2. download_videos() -> mark_downloaded (marks successful downloads)
+
+Could add more logging of scraper errors here later.
 """
 
 import sqlite3
@@ -114,21 +182,22 @@ def get_videos_in_last_n_days(conn: sqlite3.Connection, n: int = 1) -> None:
         _register_scraper_run_attempt(conn, scraper_name)
         try:
             videos = funcs["videos_since_func"](scraper_id, since)
-            for video_db_record, download_args in videos:
+            for video_db_record, _ in videos:
                 video_id = _register_video_download_attempt(conn, video_db_record)
-                try:
-                    updated_video_db_record = funcs["download_videos_func"](
-                        video_db_record, **download_args
-                    )
-                    _register_succesful_download(conn, updated_video_db_record)
-                except Exception as e:
-                    log(
-                        conn,
-                        log_type="error",
-                        log_message=e,
-                        source_id=video_db_record.get("source_id"),
-                        video_id=video_id,
-                    )
+            try:
+                successfully_updated_video_db_records = funcs["download_videos_func"](
+                    videos
+                )
+                for video_db_record in successfully_updated_video_db_records:
+                    _register_succesful_download(conn, video_db_record)
+            except Exception as e:
+                log(
+                    conn,
+                    log_type="error",
+                    log_message=e,
+                    source_id=video_db_record.get("source_id"),
+                    video_id=video_id,
+                )
             _register_scraper_successful_run(conn, scraper_name)
         except Exception as e:
             log(
