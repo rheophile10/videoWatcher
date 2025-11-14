@@ -2,9 +2,7 @@
 
 import asyncio
 import re
-import subprocess
 from datetime import datetime, timedelta
-from pathlib import Path
 import requests
 
 from playwright.async_api import async_playwright
@@ -77,49 +75,3 @@ def get_episode_details(episode_id: str) -> dict:
     r = requests.get(url, params=params, timeout=15)
     r.raise_for_status()
     return r.json()
-
-
-def download_video(m3u8_url: str, output_path: Path):
-    print(f"Downloading → {output_path.name}")
-    print(f"   Source: {m3u8_url}\n")
-
-    result = subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            m3u8_url,
-            "-c",
-            "copy",
-            "-bsf:a",
-            "aac_adtstoasc",
-            str(output_path),
-        ],
-        check=False,
-    )
-
-    if result.returncode == 0:
-        print("Download completed successfully!")
-    else:
-        print("ffmpeg failed (but probably still worked partially)")
-
-
-async def main():
-    ids = await get_recent_episode_ids(days_back=2, max_pages=5)
-    if not ids:
-        print("No episodes found.")
-        return
-
-    newest_id = next(iter(ids))
-    print(f"\nTesting download with newest episode: {newest_id}")
-
-    data = get_episode_details(newest_id)
-    details = data["page"]["details"]
-
-    title = re.sub(r'[<>:"/\\|?*]', "_", details["title_en_t"])[:120]
-    date = details["liveDateTime"][:10]
-    m3u8 = details["videoUrl"]
-
-    out_dir = Path(__file__).parent / "downloads"
-    out_dir.mkdir(exist_ok=True)
-    output_file = out_dir / f"{newest_id}.mp4"
