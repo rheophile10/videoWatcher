@@ -32,7 +32,7 @@ from typing import Dict, List, Tuple, Any, Generator
 # ----------------------------------------------------------------------
 SQL_FILE = Path(__file__).with_name("sql.sql")
 SEEDS_DIR = Path(__file__).parent / "seeds"
-DB_PATH = Path(__file__).parent / "watcher.db"
+DB_PATH = Path(__file__).parent.parent.parent / "watcher.db"
 
 sql_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -137,6 +137,18 @@ def s_proc(
     conn.executemany(stmt, rows)
 
 
+def s_proc_with_ids(
+    conn: sqlite3.Connection, table: str, stmt_type: str, rows: List[Tuple]
+) -> List[int]:
+    """Execute a statement for multiple rows and return the IDs of inserted rows."""
+    stmt = _get_statement(table, stmt_type)
+    ids = []
+    for row in rows:
+        cursor = conn.execute(stmt, row)
+        ids.append(cursor.lastrowid)
+    return ids
+
+
 def _query_statement(
     conn: sqlite3.Connection, stmt: str, params: Tuple = ()
 ) -> List[sqlite3.Row]:
@@ -163,19 +175,6 @@ def delete(conn: sqlite3.Connection, table: str, rows: List[Tuple]) -> None:
     s_proc(conn, table, "delete", rows)
 
 
-def log(
-    conn: sqlite3.Connection,
-    log_type: str,
-    log_message: str,
-    source_id: int,
-    video_id: int | None = None,
-) -> None:
-    """make a log"""
-    if log_type not in ["info", "warning", "error"]:
-        raise ValueError(f"Invalid log type: {log_type}")
-    s_proc(conn, "logs", "make_log", [(source_id, video_id, log_type, log_message)])
-
-
 # ----------------------------------------------------------------------
 # 4. DB Lifecycle & Context Manager (sqlite-vec)
 # ----------------------------------------------------------------------
@@ -192,6 +191,7 @@ def _connect(db_path: Path = DB_PATH) -> Generator[sqlite3.Connection, None, Non
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA busy_timeout = 5000;")
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
     conn.enable_load_extension(False)
@@ -225,4 +225,13 @@ def db(db_path: Path = DB_PATH) -> Generator[sqlite3.Connection, None, None]:
         yield conn
 
 
-__all__ = ["db", "upsert", "delete", "s_proc", "p_query", "log", "DB_PATH"]
+__all__ = [
+    "db",
+    "upsert",
+    "delete",
+    "s_proc",
+    "s_proc_with_ids",
+    "p_query",
+    "log",
+    "DB_PATH",
+]
