@@ -6,51 +6,30 @@ from typing import Dict, Generator, List, Tuple, Any, Literal
 import torch
 import numpy as np
 from faster_whisper import WhisperModel
-from nemo.collections.asr.models import ClusteringDiarizer
+from pyannote.audio import Pipeline
 from sentence_transformers import SentenceTransformer
 
 
-def prepare_models() -> Tuple[WhisperModel, ClusteringDiarizer, SentenceTransformer]:
+def prepare_models() -> Tuple[WhisperModel, Pipeline, SentenceTransformer]:
     """Load models into memory."""
     DEVICE: Literal["cuda", "cpu"] = "cuda" if torch.cuda.is_available() else "cpu"
     whisper = WhisperModel("large-v3-turbo", device=DEVICE, compute_type="float16")
-    diarizer = ClusteringDiarizer.from_pretrained("diar_msdd_telephonic")
-    diarizer = diarizer.to(DEVICE)
+    diarizer = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1")
     embedder = SentenceTransformer("BAAI/bge-large-en-v1.5", device=DEVICE)
     return whisper, diarizer, embedder
 
 
 def diarize_video(
-    diarizer: ClusteringDiarizer, video_path: str
+    diarizer: Pipeline, video_path: str
 ) -> Tuple[List[Tuple[int, float, float]], Dict[str, int]]:
     """Diarize a video file and return the diarizer object."""
-    diarizer.audio_file = video_path
-    diarizer.diarize()
-    rttm_lines = (
-        diarizer.rttm_lines if hasattr(diarizer, "rttm_lines") else diarizer._last_rttm
-    )
-    turn_inserts, speaker_map = _parse_rttm_lines(rttm_lines)
-    return turn_inserts, speaker_map
-
-
-def _parse_rttm_lines(
-    rttm_lines: List[str],
-) -> Tuple[List[Tuple[int, float, float]], Dict[str, int]]:
-    """Parse RTTM lines into turn inserts and speaker map."""
+    diarization = diarizer(video_path)
     speaker_map: Dict[str, int] = {}
     turn_inserts = []
-    for line in rttm_lines:
-        parts = line.strip().split()
-        if len(parts) < 8:
-            continue
-        speaker_label = parts[7]
-        start = float(parts[3])
-        duration = float(parts[4])
-        end = start + duration
-
-        if speaker_label not in speaker_map:
-            speaker_map[speaker_label] = len(speaker_map) + 1
-        turn_inserts.append((speaker_map[speaker_label], start, end))
+    for segment, track, speaker in diarization.itertracks(yield_label=True):
+        if speaker not in speaker_map:
+            speaker_map[speaker] = len(speaker_map) + 1
+        turn_inserts.append((speaker_map[speaker], segment.start, segment.end))
     return turn_inserts, speaker_map
 
 
@@ -168,10 +147,10 @@ def process_transcription_and_embed(
 def orchestrate_transcription_and_embedding(
     video_path: Path,
     video_id: int,
-) -> Generator[Tuple[Dict[str, Any], Dict[str, Any]], None, None]:
+) -> Generator[Tuple[Tuple[Any, ...], Tuple[Any, ...]], None, None]:
     """
     Full pipeline: Diarization → Transcription → Chunking → Embedding.
-    Yields tuples of (chunk_record, embedding_record) for each chunk.
+    Yields tuples of (chunk_tuple, embedding_tuple) for each chunk.
     """
     diarizer, whisper, embedder = prepare_models()
 
@@ -184,7 +163,23 @@ def orchestrate_transcription_and_embedding(
         video_path,
         video_id,
     ):
-        yield chunk, embedding_record
+        chunk_tuple = (
+            chunk["video_id"],
+            chunk["speaker_id"],
+            chunk["start_sec"],
+            chunk["end_sec"],
+            chunk["layer"],
+            chunk["chunk_type"],
+            None,  # metadata
+        )
+        embedding_tuple = (
+            embedding_record["embedding"],
+            embedding_record["text"],
+            embedding_record["video_id"],
+            embedding_record["layer"],
+            embedding_record["chunk_type"],
+        )
+        yield chunk_tuple, embedding_tuple
 
 
 __all__ = ["orchestrate_transcription_and_embedding"]

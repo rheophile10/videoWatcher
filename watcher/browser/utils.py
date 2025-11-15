@@ -3,16 +3,15 @@
 from pathlib import Path
 import subprocess
 import json
+from typing import Tuple
 
 DOWNLOADS_DIR = Path(__file__).parent.parent.parent / "downloads"
 DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def download_video(m3u8_url: str, output_path: Path):
-    print(f"Downloading → {output_path.name}")
-    print(f"   Source: {m3u8_url}\n")
-
-    result = subprocess.run(
+def download_video(m3u8_url: str, output_filename: str) -> Tuple[Path, float]:
+    path = DOWNLOADS_DIR / output_filename
+    subprocess.run(
         [
             "ffmpeg",
             "-y",
@@ -22,15 +21,12 @@ def download_video(m3u8_url: str, output_path: Path):
             "copy",
             "-bsf:a",
             "aac_adtstoasc",
-            str(output_path),
+            str(path),
         ],
         check=False,
     )
-
-    if result.returncode == 0:
-        print("Download completed successfully!")
-    else:
-        print("ffmpeg failed (but probably still worked partially)")
+    duration = get_video_duration(path)
+    return path, duration
 
 
 def get_video_duration(video_path: Path) -> float:
@@ -62,3 +58,9 @@ def get_video_duration(video_path: Path) -> float:
         raise ValueError("Duration not found in ffprobe output")
 
     return float(duration_str)
+
+
+__all__ = [
+    "download_video",
+    "DOWNLOADS_DIR",
+]
