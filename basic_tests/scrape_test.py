@@ -43,7 +43,7 @@ def test_get_videos_in_last_n_days(conn):
     """Test get_videos_in_last_n_days (mock test, since no real scrapers)."""
     print("Testing get_videos_in_last_n_days...")
     # This will attempt to run scrapers, but since they may not exist, it should log errors
-    get_videos_in_last_n_days(conn, n=1)
+    get_videos_in_last_n_days(conn, n=1, vid_count=1)
 
 
 def main():

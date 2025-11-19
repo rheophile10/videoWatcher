@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Callable, Dict, List
 from importlib import import_module
+from tqdm import tqdm
 from watcher.db import p_query, s_proc
 from watcher.db.log import insert_log
 from watcher.db.videos import (
@@ -47,9 +48,8 @@ def get_scrapers(conn: sqlite3.Connection) -> List[Dict]:
     scrapers = {}
     for row in rows:
         scraper_name = row["scraper_name"]
-        videos_since, video_download = _import_scraper(
-            conn, scraper_name, row["active"]
-        )
+        active = row["active"]
+        videos_since, video_download = _import_scraper(conn, scraper_name, active)
         if videos_since is not None and video_download is not None:
             scrapers[scraper_name] = {
                 "source_id": row["id"],
@@ -59,10 +59,14 @@ def get_scrapers(conn: sqlite3.Connection) -> List[Dict]:
     return scrapers
 
 
-def get_video_urls(conn: sqlite3.Connection, scrapers: Dict, since: datetime) -> None:
+def get_video_urls(
+    conn: sqlite3.Connection, scrapers: Dict, since: datetime, vid_count=None
+) -> None:
     """Extract video URLs from the scraper's videos_since function output."""
     try:
-        for scraper_name, scraper_info in scrapers.items():
+        for scraper_name, scraper_info in tqdm(
+            scrapers.items(), desc="Scraping sources"
+        ):
             source_id = scraper_info["source_id"]
             insert_log(
                 conn,
@@ -74,6 +78,8 @@ def get_video_urls(conn: sqlite3.Connection, scrapers: Dict, since: datetime) ->
             videos = videos_since_func(since, source_id)
             num_videos = len(videos)
             video_db_records = [video_db_record for video_db_record, _ in videos]
+            if vid_count is not None:
+                video_db_records = video_db_records[:vid_count]
             insert_videos(conn, video_db_records)
             insert_log(
                 conn,
@@ -88,14 +94,14 @@ def get_video_urls(conn: sqlite3.Connection, scrapers: Dict, since: datetime) ->
             "source_check_failed",
             source_id=source_id,
             source_name=scraper_name,
-            error_msg=str(e),
+            error_msg=e,
         )
 
 
 def download_videos(conn: sqlite3.Connection, scrapers: Dict) -> None:
     """Download videos using the scraper's download_videos function."""
     videos_to_download = get_videos_to_download(conn)
-    for row in videos_to_download:
+    for row in tqdm(videos_to_download, desc="Downloading videos"):
         scraper_name = row["scraper_name"]
         source_id = row["source_id"]
         video_id = row["video_id"]
@@ -119,15 +125,17 @@ def download_videos(conn: sqlite3.Connection, scrapers: Dict) -> None:
                 source_id=source_id,
                 video_id=video_id,
                 video_url=video_url,
-                error_msg=str(e),
+                exception=e,
             )
 
 
-def get_videos_in_last_n_days(conn: sqlite3.Connection, n: int = 1) -> None:
+def get_videos_in_last_n_days(
+    conn: sqlite3.Connection, n: int = 1, vid_count=None
+) -> None:
     """Main function to get videos from all scrapers in the last n days."""
     since = datetime.now() - timedelta(days=n)
     scrapers = get_scrapers(conn)
-    get_video_urls(conn, scrapers, since)
+    get_video_urls(conn, scrapers, since, vid_count=vid_count)
     download_videos(conn, scrapers)
 
 

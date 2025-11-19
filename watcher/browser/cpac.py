@@ -38,15 +38,20 @@ async def get_recent_episode_ids(days_back: int = 2, max_pages: int = 5) -> set[
                 m = re.search(r"id=([a-f0-9-]{36})", href)
                 if not m:
                     continue
-                date_match = re.search(r"--([a-z]+-\d{1,2}-\d{4})\?", href)
-                date_str = (
-                    date_match.group(1).replace("-", " ").title()
-                    if date_match
-                    else None
-                )
-                episode_date = (
-                    datetime.strptime(date_str, "%B %d %Y").date() if date_str else None
-                )
+                try:
+                    date_match = re.search(r"--([a-z]+-\d{1,2}-\d{4})\?", href)
+                    date_str = (
+                        date_match.group(1).replace("-", " ").title()
+                        if date_match
+                        else None
+                    )
+                    episode_date = (
+                        datetime.strptime(date_str, "%B %d %Y").date()
+                        if date_str
+                        else None
+                    )
+                except Exception:
+                    episode_date = None
                 if episode_date and episode_date < cutoff_date:
                     await browser.close()
                     return seen_ids

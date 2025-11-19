@@ -70,7 +70,7 @@ ON CONFLICT(source_id, video_url) DO UPDATE SET
     description = excluded.description,
     published_at = excluded.published_at;
 -- update_video_downloaded
-UPDATE videos SET video_file_path = ?, duration_seconds = ?, transcript_file_path = ? WHERE id = ?;
+UPDATE videos SET video_file_path = ?, duration_seconds = ? WHERE id = ?;
 -- get_videos_to_download
 SELECT s.scraper_name, s.id as source_id, v.id as video_id, v.video_url FROM videos v JOIN sources s ON v.source_id = s.id and v.video_file_path IS NULL
 -- get_videos_to_transcribe
@@ -82,12 +82,11 @@ SELECT v.source_id, v.id as video_id, v.video_file_path FROM videos v LEFT JOIN 
 CREATE TABLE IF NOT EXISTS chunks (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     video_id      INTEGER NOT NULL,
-    speaker_id    INTEGER,                            
+    speaker_id    TEXT,
     start_sec     REAL NOT NULL,
     end_sec       REAL NOT NULL,
     text          TEXT NOT NULL,
-    layer         TEXT NOT NULL DEFAULT 'transcript',   
-    chunk_type    TEXT NOT NULL,                        
+    layer         TEXT NOT NULL DEFAULT 'transcript',
     metadata      JSON,
     created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
 
@@ -96,19 +95,20 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_chunks_video    ON chunks(video_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_time     ON chunks(video_id, start_sec, end_sec);
 CREATE INDEX IF NOT EXISTS idx_chunks_layer    ON chunks(layer);
-CREATE INDEX IF NOT EXISTS idx_chunks_type     ON chunks(chunk_type);
+
 
 -- insert_chunk
-INSERT INTO chunks (video_id, speaker_id, start_sec, end_sec, layer, chunk_type, metadata)
+INSERT INTO chunks (video_id, speaker_id, start_sec, end_sec, text, layer, metadata)
 VALUES (?, ?, ?, ?, ?, ?, ?);
 
+-- table: chunk_fts
+-- create
 CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
     text,
     content='chunks',
     content_rowid='id'
 );
 
--- Triggers to keep FTS5 in sync
 CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
     INSERT INTO chunk_fts(rowid, text) VALUES (new.id, new.text);
 END;
@@ -124,9 +124,24 @@ END;
 -- create
 CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vectors USING vec0(
     chunk_id      INTEGER PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
-    embedding     float[768], 
+    embedding     float[1024], 
 );
 
 -- insert_embedding
 INSERT INTO chunk_vectors (chunk_id, embedding)
 VALUES (?, ?);
+-- get_chunks_without_embeddings
+SELECT c.id as chunk_id, c.text
+FROM chunks c
+WHERE NOT EXISTS (
+    SELECT 1 FROM chunk_vectors cv 
+    WHERE cv.chunk_id = c.id
+)
+LIMIT ?;
+-- get_chunks_without_embeddings_count
+SELECT count(*) as count
+FROM chunks c
+WHERE NOT EXISTS (
+    SELECT 1 FROM chunk_vectors cv 
+    WHERE cv.chunk_id = c.id
+)

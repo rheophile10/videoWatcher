@@ -7,3 +7,5 @@ TODO.md
 .venv/
 __pycache__/
 *.mp4
+models/*
+.env

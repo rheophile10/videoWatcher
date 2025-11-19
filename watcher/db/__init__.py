@@ -25,11 +25,9 @@ import sqlite3
 import sqlite_vec
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Tuple, Any, Generator
+from typing import Dict, List, Tuple, Any, Generator, Iterable, Optional
 
-# ----------------------------------------------------------------------
-# Paths & Global Cache
-# ----------------------------------------------------------------------
+
 SQL_FILE = Path(__file__).with_name("sql.sql")
 SEEDS_DIR = Path(__file__).parent / "seeds"
 DB_PATH = Path(__file__).parent.parent.parent / "watcher.db"
@@ -37,9 +35,6 @@ DB_PATH = Path(__file__).parent.parent.parent / "watcher.db"
 sql_cache: Dict[str, Dict[str, Any]] = {}
 
 
-# ----------------------------------------------------------------------
-# 1. SQL Parsing
-# ----------------------------------------------------------------------
 def _init_sql_cache() -> Dict[str, Dict[str, Any]]:
     """Parse `sql.sql` → cache of table metadata."""
     if sql_cache:
@@ -94,9 +89,6 @@ def _init_sql_cache() -> Dict[str, Dict[str, Any]]:
     return tables
 
 
-# ----------------------------------------------------------------------
-# 2. DB Initialization
-# ----------------------------------------------------------------------
 def _init_db(conn: sqlite3.Connection, seed: bool = True) -> None:
     """Create tables and optionally seed from CSV."""
     schema = _init_sql_cache()
@@ -119,9 +111,6 @@ def _seed(conn: sqlite3.Connection, table: str, seed_file: str) -> None:
             upsert(conn, table, rows)
 
 
-# ----------------------------------------------------------------------
-# 3. CRUD Helpers
-# ----------------------------------------------------------------------
 def _get_statement(table: str, stmt_name: str) -> str:
     stmt = sql_cache.get(table, {}).get(stmt_name)
     if not stmt:
@@ -135,34 +124,46 @@ def s_proc(
     """Execute a statement for multiple rows."""
     stmt = _get_statement(table, stmt_type)
     conn.executemany(stmt, rows)
-
-
-def s_proc_with_ids(
-    conn: sqlite3.Connection, table: str, stmt_type: str, rows: List[Tuple]
-) -> List[int]:
-    """Execute a statement for multiple rows and return the IDs of inserted rows."""
-    stmt = _get_statement(table, stmt_type)
-    ids = []
-    for row in rows:
-        cursor = conn.execute(stmt, row)
-        ids.append(cursor.lastrowid)
-    return ids
+    conn.commit()
 
 
 def _query_statement(
-    conn: sqlite3.Connection, stmt: str, params: Tuple = ()
+    conn: sqlite3.Connection, stmt: str, params: Optional[Tuple] = None
 ) -> List[sqlite3.Row]:
     """Execute a query and return all results."""
-    cur = conn.execute(stmt, params)
+    if params is None:
+        cur = conn.execute(stmt)
+    else:
+        cur = conn.execute(stmt, params)
     return cur.fetchall()
 
 
 def p_query(
-    conn: sqlite3.Connection, table: str, stmt: str, params: Tuple
+    conn: sqlite3.Connection, table: str, stmt: str, params: Optional[Tuple] = None
 ) -> List[sqlite3.Row]:
     """Parameterized query."""
     stmt = sql_cache.get(table, {}).get(stmt)
+    if not stmt:
+        raise ValueError(f"No {stmt} statement for table '{table}'")
     return _query_statement(conn, stmt, params)
+
+
+def batched_insert(
+    conn: sqlite3.Connection,
+    table_name: str,
+    stmt_name: str,
+    chunk_embeddings: Iterable,
+    batch_size: int = 100,
+) -> None:
+    """Insert chunk embeddings from a generator in batches."""
+    batch = []
+    for chunk in chunk_embeddings:
+        batch.append(chunk)
+        if len(batch) == batch_size:
+            s_proc(conn, table_name, stmt_name, batch)
+            batch.clear()
+    if batch:
+        s_proc(conn, table_name, stmt_name, batch)
 
 
 def upsert(conn: sqlite3.Connection, table: str, rows: List[Tuple]) -> None:
@@ -173,11 +174,6 @@ def upsert(conn: sqlite3.Connection, table: str, rows: List[Tuple]) -> None:
 def delete(conn: sqlite3.Connection, table: str, rows: List[Tuple]) -> None:
     """Delete rows by ID."""
     s_proc(conn, table, "delete", rows)
-
-
-# ----------------------------------------------------------------------
-# 4. DB Lifecycle & Context Manager (sqlite-vec)
-# ----------------------------------------------------------------------
 
 
 @contextmanager
@@ -209,6 +205,7 @@ def _connect(db_path: Path = DB_PATH) -> Generator[sqlite3.Connection, None, Non
 
 def _ensure_db_exists(db_path: Path = DB_PATH) -> None:
     """Create DB file + schema + vec + seeds if missing."""
+    _init_sql_cache()  # Always populate the SQL cache
     if db_path.exists() and db_path.stat().st_size > 0:
         return
 
@@ -230,7 +227,6 @@ __all__ = [
     "upsert",
     "delete",
     "s_proc",
-    "s_proc_with_ids",
     "p_query",
     "log",
     "DB_PATH",

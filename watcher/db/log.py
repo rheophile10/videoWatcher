@@ -5,6 +5,7 @@ Logging utilities for the database.
 from datetime import datetime, timedelta
 from typing import Optional
 import sqlite3
+import traceback
 
 from . import s_proc, p_query
 
@@ -57,6 +58,7 @@ def insert_log(
     key: str,
     source_id: Optional[int] = None,
     video_id: Optional[int] = None,
+    exception: Optional[Exception] = None,
     **kwargs,
 ) -> None:
     """Insert a log entry based on the key and provided arguments."""
@@ -67,11 +69,22 @@ def insert_log(
     event_type = log_info["event_type"]
     template = log_info["template"]
 
+    # If exception is provided, use full traceback for error_msg
+    if exception is not None:
+        kwargs["error_msg"] = traceback.format_exc()
+
     # Format the message with kwargs
     try:
         event_message = template.format(**kwargs)
     except KeyError as e:
         raise ValueError(f"Missing required argument for log key '{key}': {e}")
+
+    # Print error messages to console for debugging
+    if event_type == "error":
+        print(f"[ERROR] {event_message}")
+        if exception is not None:
+            print("Full traceback:")
+            print(traceback.format_exc())
 
     # Ensure source_id is provided for source-related logs
     if source_id is None:
@@ -93,7 +106,7 @@ def cleanup_old_logs(conn: sqlite3.Connection, days: int = 30) -> int:
 
 def print_today_logs(conn: sqlite3.Connection) -> None:
     """Pretty print all logs from today."""
-    rows = p_query(conn, "logs", "get_today_logs", ())
+    rows = p_query(conn, "log", "get_today_logs", ())
     if not rows:
         print("No logs found for today.")
         return
