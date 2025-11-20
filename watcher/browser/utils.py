@@ -4,60 +4,61 @@ from pathlib import Path
 import subprocess
 import json
 from typing import Tuple
+import yt_dlp
 
 DOWNLOADS_DIR = Path(__file__).parent.parent.parent / "downloads"
 DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def download_video(m3u8_url: str, output_filename: str) -> Tuple[Path, float]:
-    path = DOWNLOADS_DIR / output_filename
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            m3u8_url,
-            "-c",
-            "copy",
-            "-bsf:a",
-            "aac_adtstoasc",
-            str(path),
-        ],
-        check=False,
-    )
-    duration = get_video_duration(path)
-    return path, duration
+def list_formats(url: str):
+    """Prints available formats for debugging."""
+    ydl_opts = {
+        "listformats": True,  # ← This is the key flag
+        "quiet": False,
+        "no_warnings": False,
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            info = ydl.extract_info(url, download=False)
+            print(f"Title: {info.get('title', 'N/A')}")
+            print(f"Duration: {info.get('duration', 'N/A')}s")
+            print("\nAvailable Formats:")
+            for f in info.get("formats", []):
+                print(
+                    f"ID: {f.get('format_id')}, Ext: {f.get('ext')}, Res: {f.get('height')}p, Filesize: {f.get('filesize_approx', 'N/A')} bytes"
+                )
+        except Exception as e:
+            print(f"Error: {e}")
 
 
-def get_video_duration(video_path: Path) -> float:
-    """Get the duration of a video file in seconds using ffprobe."""
-    if not video_path.exists():
-        raise FileNotFoundError(f"Video file not found: {video_path}")
+def download_video(url: str, output_filename: str) -> Tuple[Path, float, str]:
+    path = DOWNLOADS_DIR / f"{Path(output_filename).stem}.mp4"
+    list_formats(url)
+    ydl_opts = {
+        "format": "worstvideo+bestaudio/best",
+        "outtmpl": str(path),
+        "concurrent_fragment_downloads": 16,
+        "retries": 30,
+        "fragment_retries": 30,
+        "continuedl": True,
+        "merge_output_format": "mp4",
+        "get_duration": True,
+        "progress": True,
+        "quiet": True,
+        "console_title": True,
+        "no_warnings": True,
+    }
 
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_format",
-            str(video_path),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        duration = info.get("duration")
+        title = info.get("title")
 
-    if result.returncode != 0:
-        raise RuntimeError(f"ffprobe failed: {result.stderr}")
+    if duration is None:
+        raise ValueError("Could not determine video duration")
 
-    data = json.loads(result.stdout)
-    duration_str = data.get("format", {}).get("duration")
-    if duration_str is None:
-        raise ValueError("Duration not found in ffprobe output")
-
-    return float(duration_str)
+    return path, float(duration), title
 
 
 __all__ = [

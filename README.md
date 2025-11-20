@@ -17,7 +17,6 @@ Keeps a permanent, searchable record.
 perpetual scrutiny of utterances of elected officials
 
 # requirements
-you need ffmpeg and it needs to be in PATH
 playwright install-deps
 playwright install
 you need a hugging face token for speaker diarization

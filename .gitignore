@@ -9,3 +9,8 @@ __pycache__/
 *.mp4
 models/*
 .env
+*.deb
+*.whl
+*.part
+*.ytdl
+downloads/*
