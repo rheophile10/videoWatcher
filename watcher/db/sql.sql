@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS videos (
     UNIQUE(source_id, video_url)
 );
 CREATE INDEX IF NOT EXISTS idx_videos_published ON videos(published_at);
--- seed: videos.csv
+-- seed videos.csv
 -- upsert
 INSERT INTO videos(source_id, video_url, title, description, published_at, seen_at, video_file_path, duration_seconds)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -88,10 +88,13 @@ SELECT s.scraper_name, s.id as source_id, v.id as video_id, v.video_url FROM vid
 SELECT v.source_id, v.id as video_id, v.video_file_path FROM videos v LEFT JOIN chunks c on v.id = c.video_id where c.video_id IS NULL and v.video_file_path IS NOT NULL and v.video_file_path != "";
 -- videos_fetched_today
 SELECT 
-    v.id                    AS videoId,
-    v.title                 AS videoTitle,
+    v.id                    AS id,
+    v.title                 AS title,
+    v.description           AS description,
     v.video_url             AS videoUrl,
+    v.published_at          AS publishedAt,
     v.seen_at               AS seen_at,
+    v.duration_seconds     AS durationSeconds,
     case when v.video_file_path IS NOT NULL then 1 else 0 end AS downloaded,
     COALESCE(chunk_counts.total_chunks, 0) > 0          AS has_transcript,
     COALESCE(vec_counts.embedded_chunks, 0) > 0         AS has_embeddings,

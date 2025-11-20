@@ -22,7 +22,7 @@ def get_videos_to_download(conn: sqlite3.Connection) -> List[sqlite3.Row]:
 def get_videos_fetched_today(
     conn,
     since: datetime = datetime.combine(datetime.today(), time.min),
-    keywords_fts_query: str = "gun OR firearm OR rifle",
+    keywords_fts_query: str = "gun OR firearm OR rifle OR weapon",
 ) -> List[sqlite3.Row]:
     """
     Returns all videos seen today with rich metadata:

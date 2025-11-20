@@ -111,5 +111,5 @@ def videos_since(since: datetime, source_id: int) -> list[tuple[dict, str]]:
 
 def video_download(video_url: str, video_id: int) -> Tuple[Path, float]:
     """Download video from m3u8 URL."""
-    filename = str(video_id) + ".mp4"
+    filename = str(video_id)
     return download_video(video_url, filename)

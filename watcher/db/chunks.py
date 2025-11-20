@@ -25,7 +25,7 @@ def export_today_chunk_hits(
     conn: sqlite3.Connection,
     since: datetime = datetime.combine(datetime.today(), datetime.min.time()),
     contest_chunks: int = 5,
-    keywords_fts_query: str = "gun OR firearm OR rifle",
+    keywords_fts_query: str = "gun OR firearm OR rifle OR weapon",
     video_id: int = None,
 ) -> List[sqlite3.Row]:
     """Export chunks with keyword hits from videos seen today."""
