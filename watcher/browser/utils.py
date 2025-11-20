@@ -1,10 +1,9 @@
 """download utilities for videos."""
 
 from pathlib import Path
-import subprocess
-import json
 from typing import Tuple
 import yt_dlp
+from datetime import datetime
 
 DOWNLOADS_DIR = Path(__file__).parent.parent.parent / "downloads"
 DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -32,18 +31,26 @@ def list_formats(url: str):
             print(f"Error: {e}")
 
 
-def download_video(url: str, output_filename: str) -> Tuple[Path, float, str]:
-    path = DOWNLOADS_DIR / f"{Path(output_filename).stem}.mp4"
-    list_formats(url)
+def download_video(
+    url: str, output_filename: str, show_formats: bool = False
+) -> Tuple[Path, float, str]:
+    stem = Path(output_filename).stem
+    path_template = DOWNLOADS_DIR / f"{stem}.%(ext)s"
+
     ydl_opts = {
         "format": "worstvideo+bestaudio/best",
-        "outtmpl": str(path),
+        "outtmpl": str(path_template),
         "concurrent_fragment_downloads": 16,
         "retries": 30,
         "fragment_retries": 30,
         "continuedl": True,
         "merge_output_format": "mp4",
         "get_duration": True,
+        "writesubtitles": True,
+        "writeautomaticsubtitles": True,
+        "subtitleslangs": ["en", "en-US", "en-CA"],
+        "subtitlesformat": "srt",
+        "skip_download": False,
         "progress": True,
         "quiet": True,
         "console_title": True,
@@ -52,13 +59,37 @@ def download_video(url: str, output_filename: str) -> Tuple[Path, float, str]:
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        duration = info.get("duration")
-        title = info.get("title")
 
-    if duration is None:
-        raise ValueError("Could not determine video duration")
+    video_path = Path(ydl.prepare_filename(info))
 
-    return path, float(duration), title
+    possible_subs = [
+        video_path.with_suffix(".en.srt"),
+        video_path.with_suffix(".en-US.srt"),
+        video_path.with_suffix(".en-CA.srt"),
+        video_path.with_suffix(".srt"),  # fallback
+        video_path.with_suffix(".vtt"),
+    ]
+    subtitle_path = next((p for p in possible_subs if p.exists()), None)
+    duration = float(info.get("duration") or 0)
+    title = info.get("title", "Unknown Title")
+    upload_date = info.get("upload_date")
+    publish_date = (
+        datetime.strptime(upload_date, "%Y%m%d").strftime("%Y-%m-%d")
+        if upload_date and len(upload_date) == 8
+        else "Unknown"
+    )
+    if show_formats:
+        print(
+            f"video info: {title} ({publish_date}), duration: {duration}s, subtitles: {subtitle_path}"
+        )
+        list_formats(url)
+
+    return (
+        video_path,
+        float(duration),
+        title,
+        # subtitle_path,
+    )
 
 
 __all__ = [
