@@ -26,11 +26,15 @@ import sqlite_vec
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Tuple, Any, Generator, Iterable, Optional
+from datetime import datetime
 
 
 SQL_FILE = Path(__file__).with_name("sql.sql")
 SEEDS_DIR = Path(__file__).parent / "seeds"
 DB_PATH = Path(__file__).parent.parent.parent / "watcher.db"
+EXPORTS_PATH = Path(__file__).parent.parent.parent / "exports"
+SEEDS_DIR.mkdir(parents=True, exist_ok=True)
+EXPORTS_PATH.mkdir(parents=True, exist_ok=True)
 
 sql_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -174,6 +178,25 @@ def upsert(conn: sqlite3.Connection, table: str, rows: List[Tuple]) -> None:
 def delete(conn: sqlite3.Connection, table: str, rows: List[Tuple]) -> None:
     """Delete rows by ID."""
     s_proc(conn, table, "delete", rows)
+
+
+def rows_to_csv(rows: List[sqlite3.Row], report_name: str) -> Path:
+    if not rows:
+        raise ValueError("No rows to export")
+
+    path = (
+        EXPORTS_PATH
+        / f"export_{report_name}{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    )
+    rows = [dict(row) for row in rows]
+    keys = rows[0].keys()
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=keys)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"Exported {len(rows)} rows → {path.absolute()}")
+    return path
 
 
 @contextmanager

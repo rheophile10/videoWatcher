@@ -81,6 +81,9 @@ def get_video_urls(
             if vid_count is not None:
                 video_db_records = video_db_records[:vid_count]
             insert_videos(conn, video_db_records)
+            print(f"Scraper {scraper_name}: Found {num_videos} videos since {since}")
+            for vid in video_db_records:
+                print(f" - {dict(vid)}")
             insert_log(
                 conn,
                 "source_check_successful",
@@ -109,8 +112,8 @@ def download_videos(conn: sqlite3.Connection, scrapers: Dict) -> None:
         scraper_info = scrapers.get(scraper_name)
         download_videos_func = scraper_info["download_videos_func"]
         try:
-            output_path, duration = download_videos_func(video_url, video_id)
-            update_video_downloaded(conn, video_id, str(output_path), duration)
+            output_path, duration, title = download_videos_func(video_url, video_id)
+            update_video_downloaded(conn, video_id, str(output_path), duration, title)
             insert_log(
                 conn,
                 "video_downloaded",

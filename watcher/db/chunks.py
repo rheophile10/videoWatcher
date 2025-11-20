@@ -4,7 +4,8 @@ Chunk-related database operations.
 
 from typing import Tuple, Any, Generator, List
 import sqlite3
-from watcher.db import p_query, batched_insert
+from watcher.db import p_query, batched_insert, rows_to_csv
+from datetime import datetime
 
 
 def get_chunks_without_embeddings(
@@ -18,6 +19,24 @@ def get_chunks_without_embeddings(
         "get_chunks_without_embeddings",
         (limit,),
     )
+
+
+def export_today_chunk_hits(
+    conn: sqlite3.Connection,
+    since: datetime = datetime.combine(datetime.today(), datetime.min.time()),
+    contest_chunks: int = 5,
+    keywords_fts_query: str = "gun OR firearm OR rifle",
+) -> List[sqlite3.Row]:
+    """Export chunks with keyword hits from videos seen today."""
+    since_str = since.strftime("%Y-%m-%d %H:%M:%S")
+    rows = p_query(
+        conn,
+        "chunks",
+        "export_today_chunks_with_video_info",
+        params=(keywords_fts_query, since_str, contest_chunks, since_str),
+    )
+    rows_to_csv(rows, "today_chunk_hits")
+    return rows
 
 
 def insert_chunks(

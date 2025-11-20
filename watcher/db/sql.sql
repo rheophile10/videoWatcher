@@ -70,11 +70,45 @@ ON CONFLICT(source_id, video_url) DO UPDATE SET
     description = excluded.description,
     published_at = excluded.published_at;
 -- update_video_downloaded
-UPDATE videos SET video_file_path = ?, duration_seconds = ? WHERE id = ?;
+UPDATE videos SET video_file_path = ?, duration_seconds = ?, title = ? WHERE id = ?;
 -- get_videos_to_download
 SELECT s.scraper_name, s.id as source_id, v.id as video_id, v.video_url FROM videos v JOIN sources s ON v.source_id = s.id and v.video_file_path IS NULL
 -- get_videos_to_transcribe
 SELECT v.source_id, v.id as video_id, v.video_file_path FROM videos v LEFT JOIN chunks c on v.id = c.video_id AND c.video_id IS NULL
+-- videos_fetched_today
+SELECT 
+    v.id                    AS videoId,
+    v.title                 AS videoTitle,
+    v.video_url             AS videoUrl,
+    v.seen_at               AS seen_at,
+    case when v.video_file_path IS NOT NULL then 1 else 0 end AS downloaded,
+    COALESCE(chunk_counts.total_chunks, 0) > 0          AS has_transcript,
+    COALESCE(vec_counts.embedded_chunks, 0) > 0         AS has_embeddings,
+    COALESCE(match_counts.keyword_hits, 0)              AS keyword_hits,
+    0 AS analyzed,
+    0  AS briefed
+FROM videos v
+LEFT JOIN (
+    SELECT video_id, COUNT(*) AS total_chunks
+    FROM chunks
+    GROUP BY video_id
+) chunk_counts ON chunk_counts.video_id = v.id
+LEFT JOIN (
+    SELECT c.video_id, COUNT(*) AS embedded_chunks
+    FROM chunk_vectors cv
+    JOIN chunks c ON cv.chunk_id = c.id
+    GROUP BY c.video_id
+) vec_counts ON vec_counts.video_id = v.id
+LEFT JOIN (
+    SELECT c.video_id, COUNT(*) AS keyword_hits
+    FROM chunk_fts f
+    JOIN chunks c ON f.rowid = c.id
+    WHERE f.text MATCH ?
+    GROUP BY c.video_id
+) match_counts ON match_counts.video_id = v.id
+WHERE v.seen_at >= ?
+ORDER BY v.seen_at DESC;
+
 
 -- table: chunks
 -- All text segments (sentences, paragraphs, summaries, topics, sliding windows, etc.)
@@ -100,6 +134,49 @@ CREATE INDEX IF NOT EXISTS idx_chunks_layer    ON chunks(layer);
 -- insert_chunk
 INSERT INTO chunks (video_id, speaker_id, start_sec, end_sec, text, layer, metadata)
 VALUES (?, ?, ?, ?, ?, ?, ?);
+-- export_today_chunks_with_video_info
+SELECT 
+    v.id          AS videoId,
+    v.title       AS videoTitle,
+    v.video_url   AS videoUrl,
+    c.speaker_id  AS speakerId,
+    c.start_sec,
+    c.end_sec,
+    c.text
+FROM chunks c
+JOIN videos v ON c.video_id = v.id
+WHERE v.seen_at >= ?
+ORDER BY v.id, c.start_sec;
+-- export_today_chunk_hits
+WITH matches AS (
+    SELECT c.id AS chunk_id, c.video_id
+    FROM chunk_fts f
+    JOIN chunks c ON f.rowid = c.id
+    JOIN videos v ON c.video_id = v.id
+    WHERE f.text MATCH ?
+        AND v.seen_at >= ?
+),
+context AS (
+    SELECT DISTINCT c2.id
+    FROM matches m
+    JOIN chunks c2 ON c2.video_id = m.video_id
+    WHERE ABS(c2.id - m.chunk_id) <= ?
+)
+SELECT 
+    v.id          AS videoId,
+    v.title       AS videoTitle,
+    v.video_url   AS videoUrl,
+    c.speaker_id  AS speakerId,
+    c.start_sec   AS start_sec,
+    c.end_sec     AS end_sec,
+    c.text        AS text,
+    (m.chunk_id IS NOT NULL) AS is_match
+FROM chunks c
+JOIN videos v ON c.video_id = v.id
+LEFT JOIN matches m ON c.id = m.chunk_id
+WHERE c.id IN (SELECT id FROM context)
+    AND v.seen_at >= ?
+ORDER BY v.id, c.start_sec;
 
 -- table: chunk_fts
 -- create

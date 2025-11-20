@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 import sqlite3
 import traceback
+from watcher.db import rows_to_csv
 
 from . import s_proc, p_query
 
@@ -115,6 +116,7 @@ def print_today_logs(conn: sqlite3.Connection) -> None:
         event_type = row["event_type"]
         message = row["event_message"]
         print(f"{timestamp} [{event_type.upper()}] {message}")
+    rows_to_csv(rows, "logs")
 
 
 __all__ = ["LOG_MESSAGES", "insert_log", "cleanup_old_logs", "print_today_logs"]
