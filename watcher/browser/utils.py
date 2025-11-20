@@ -34,7 +34,7 @@ def list_formats(url: str):
 def download_video(
     url: str, output_filename: str, show_formats: bool = False
 ) -> Tuple[Path, float, str]:
-    stem = Path(output_filename).stem
+    stem = Path(f"{output_filename}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     path_template = DOWNLOADS_DIR / f"{stem}.%(ext)s"
 
     ydl_opts = {

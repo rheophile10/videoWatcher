@@ -11,12 +11,14 @@ from whisper.audio import load_audio
 from pyannote.audio import Pipeline as PyannotePipeline
 import numpy as np
 from sentence_transformers import SentenceTransformer
+from watcher.db.chunks import export_today_chunk_hits
 from tqdm import tqdm
 import sqlite3
 from dotenv import load_dotenv
 import os
+from pydub import AudioSegment
 
-from watcher.db import batched_insert, p_query
+from watcher.db import batched_insert, p_query, dicts_to_csv
 
 load_dotenv()
 HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
@@ -26,7 +28,7 @@ MODELS_FOLDER = Path("./models")
 
 
 def prepare_transcription_model(
-    model_name: str = "large-v3",
+    model_name: str = "large-v2",
     device: str = DEVICE,
     download_root: Path = MODELS_FOLDER / "whisper",
 ) -> whisper.Whisper:
@@ -61,6 +63,133 @@ def prepare_embedding_model(
     return embedder
 
 
+def transcribe_with_chunks(
+    model: whisper.Whisper,
+    video_path: str,
+    chunk_length_ms: int = 30_000,  # 30 seconds
+    overlap_ms: int = 2_000,  # 2 seconds overlap
+    language: str = "en",
+    temperature: float = 0.2,
+    beam_size: int = 1,
+    best_of: int = 5,
+    patience: float = 2.0,
+    compression_ratio_threshold: float = 2.4,
+    no_speech_threshold: float = 0.6,
+) -> List[Dict[str, Any]]:
+    """
+    Transcribe long audio/video reliably using fixed-size chunks + overlap.
+    Returns a list of segments with accurate global timestamps.
+    """
+    video_path = Path(video_path)
+    if not video_path.exists():
+        raise FileNotFoundError(f"File not found: {video_path}")
+
+    print(
+        f"Loading audio from: {video_path.name} ({os.path.getsize(video_path)/1e6:.1f} MB)"
+    )
+    audio = AudioSegment.from_file(video_path)
+    total_duration_ms = len(audio)
+    total_seconds = total_duration_ms / 1000
+
+    print(
+        f"Audio duration: {total_seconds:.1f} seconds → "
+        f"~{total_duration_ms // chunk_length_ms + 1} chunks"
+    )
+
+    segments = []
+    temp_files = []
+
+    # Pre-calculate all chunk boundaries
+    chunk_starts = list(range(0, total_duration_ms, chunk_length_ms - overlap_ms))
+    if chunk_starts[-1] + chunk_length_ms < total_duration_ms:
+        chunk_starts.append(total_duration_ms - chunk_length_ms)  # final chunk
+
+    # Main progress bar
+    with tqdm(
+        total=len(chunk_starts), desc="Transcribing chunks", unit="chunk"
+    ) as pbar:
+        for i, chunk_start_ms in enumerate(chunk_starts):
+            chunk_end_ms = min(chunk_start_ms + chunk_length_ms, total_duration_ms)
+
+            # Adjust start with overlap (except first chunk)
+            if i > 0:
+                extract_start = chunk_start_ms - overlap_ms
+            else:
+                extract_start = chunk_start_ms
+
+            chunk = audio[extract_start:chunk_end_ms]
+            temp_path = Path(f"temp_chunk_{os.getpid()}_{i}.wav")  # unique per process
+            chunk.export(temp_path, format="wav")
+            temp_files.append(temp_path)
+
+            # Transcribe
+            result = model.transcribe(
+                str(temp_path),
+                language=language,
+                word_timestamps=False,
+                temperature=temperature,
+                beam_size=beam_size,
+                best_of=best_of,
+                patience=patience,
+                compression_ratio_threshold=compression_ratio_threshold,
+                no_speech_threshold=no_speech_threshold,
+            )
+
+            # Adjust timestamps to global time
+            offset_seconds = extract_start / 1000.0
+            for seg in result.get("segments", []):
+                seg["start"] += offset_seconds
+                seg["end"] += offset_seconds
+                segments.append(
+                    {
+                        "start": round(seg["start"], 3),
+                        "end": round(seg["end"], 3),
+                        "text": seg["text"].strip(),
+                    }
+                )
+
+            pbar.update(1)
+            pbar.set_postfix(
+                {
+                    "time": f"{chunk_end_ms/1000:.1f}s",
+                    "chunks_left": len(chunk_starts) - (i + 1),
+                }
+            )
+
+    # === Optional: Deduplicate overlapping text (very light & effective) ===
+    if len(segments) > 1 and overlap_ms > 0:
+        cleaned = []
+        last_text = ""
+        for seg in segments:
+            # If this segment starts near the end of previous one and text overlaps heavily
+            if (
+                cleaned
+                and seg["start"] < cleaned[-1]["end"] + 0.5
+                and seg["text"] in cleaned[-1]["text"] + " "
+            ):  # rough but works great
+                # Merge or skip duplicate
+                cleaned[-1]["end"] = max(cleaned[-1]["end"], seg["end"])
+                cleaned[-1]["text"] = (
+                    cleaned[-1]["text"]
+                    + " "
+                    + seg["text"].split(last_text, 1)[-1].strip()
+                )
+            else:
+                cleaned.append(seg)
+            last_text = seg["text"]
+        segments = cleaned
+
+    # === Cleanup ===
+    for temp_path in temp_files:
+        try:
+            temp_path.unlink()
+        except:
+            pass
+
+    print(f"Transcription complete! {len(segments)} clean segments.")
+    return segments
+
+
 def make_diarized_transcript(
     video_path: Path | str,
     whisper_model: whisper.Whisper,
@@ -74,22 +203,13 @@ def make_diarized_transcript(
     video_path = str(video_path)
     audio: np.ndarray = load_audio(video_path)
     print(f"🎬 Transcribing video: {Path(video_path).name}")
-    transcript_result: dict = whisper_model.transcribe(
-        audio,
-        language="en",
-        word_timestamps=True,
-        verbose=False,
-        temperature=0.0,
-        beam_size=5,
-        best_of=5,
-    )
+    transcript_result = transcribe_with_chunks(whisper_model, video_path=video_path)
     if diarization_pipeline:
         print("🗣️ Diarizing speakers")
         diarization: dict = diarization_pipeline(
             {"waveform": torch.from_numpy(audio).unsqueeze(0), "sample_rate": 16000}
         )
         exclusive_diarization = diarization.exclusive_speaker_diarization
-        transcript_result = transcript_result.get("segments", [])
         gc.collect()
         torch.cuda.empty_cache()
         transcript_result = pair_transcript_with_speaker(
@@ -104,7 +224,6 @@ PairedResult = Tuple[str, float, float, str]
 def pair_transcript_with_speaker(
     transcript_result: List[Dict[str, Any]],
     exclusive_diarization: List[Tuple[Any, str]],
-    pause_threshold: float = 1.0,
 ) -> List[PairedResult]:
     """
     Marries words + diarization with crude lag fix.
@@ -115,95 +234,48 @@ def pair_transcript_with_speaker(
         return []
 
     # Extract and sort all words
-    words = sorted(
-        (word for record in transcript_result for word in record.get("words", [])),
-        key=lambda w: w["start"],
-    )
-    if not words:
-        return []
+    # words = sorted(
+    #     (word for record in transcript_result for word in record.get("words", [])),
+    #     key=lambda w: w["start"],
+    # )
+    # if not words:
+    #     return []
 
     # Convert diarization (list or generator) to list once
     diarization = [(seg, speaker) for seg, speaker in exclusive_diarization]
+    dicts_to_csv(
+        [
+            {"start": seg.start, "end": seg.end, "speaker": spk}
+            for seg, spk in diarization
+        ],
+        f"diarization_segments",
+    )
+    # dicts_to_csv(
+    #     [
+    #         {"start": w["start"], "end": w["end"], "word": w.get("word", "")}
+    #         for w in words
+    #     ],
+    #     f"transcript_words",
+    # )
+    dicts_to_csv(
+        transcript_result,
+        f"transcript_text",
+    )
     if not diarization:
         return []
 
-    # Crude lag correction using first word and first diarization segment
-    first_word_start = words[0]["start"]
-    first_diar_start = diarization[0][0].start
-    lag = first_word_start - first_diar_start
-
-    print(
-        f"Crude lag correction: {lag:+.3f}s (word @ {first_word_start:.2f}s → diar @ {first_diar_start:.2f}s)"
-    )
-
-    # Apply lag to all words
-    for w in words:
-        w["start"] += lag
-        w["end"] += lag
-
-    # Helper: emit a completed speaker block with nice formatting
-    def emit(speaker: str, start: float, end: float, text: str):
-        print(f"\n{speaker} ({start:.2f} → {end:.2f}):")
-        # Split into paragraphs on double newlines, then print line-wrapped
-        paragraphs = [p.strip() for p in text.strip().split("\n") if p.strip()]
-        for para in paragraphs:
-            words_in_para = para.split()
-            for i in range(0, len(words_in_para), 16):
-                print("    " + " ".join(words_in_para[i : i + 16]))
-            print()  # extra blank line between paragraphs
-        results.append((speaker, start, end, text.strip()))
-
     results: List[PairedResult] = []
-
-    current_speaker = None
-    current_start = None
-    current_text = ""
-    last_word_end = None  # track end time of previous word
-
-    for word in words:
-        w_start = word["start"]
-        w_end = word["end"]
-        w_text = (word.get("word") or word.get("text") or "").strip()
-        if not w_text:
-            continue
-
-        # Find best speaker by max overlap
-        best_speaker = "UNKNOWN"
-        best_overlap = -1.0
+    for text in transcript_result:
+        text_start = text["start"]
+        text_end = text["end"]
+        text_str = text["text"].strip()
+        # shitty speaker identification aglo
+        speaker_label = "Unknown"
         for seg, speaker in diarization:
-            overlap_dur = max(0.0, min(w_end, seg.end) - max(w_start, seg.start))
-            if overlap_dur > best_overlap:
-                best_overlap = overlap_dur
-                best_speaker = speaker
-
-        # Speaker changed → emit previous block
-        if current_speaker is not None and best_speaker != current_speaker:
-            emit(current_speaker, current_start, last_word_end or w_start, current_text)
-            current_text = ""
-            last_word_end = None
-
-        # New speaker starts
-        if current_speaker != best_speaker:
-            current_speaker = best_speaker
-            current_start = w_start
-            last_word_end = w_end
-            current_text = w_text
-            continue  # skip appending below — already added
-
-        # Same speaker continues...
-
-        # Check for significant pause (>1s) → insert paragraph break
-        if last_word_end is not None and (w_start - last_word_end) >= pause_threshold:
-            current_text += "\n\n"  # double newline = paragraph break
-
-        # Append word (with space)
-        current_text += " " + w_text
-        last_word_end = w_end
-
-    # Emit final speaker block
-    if current_speaker and current_text.strip():
-        final_end = last_word_end or words[-1]["end"]
-        emit(current_speaker, current_start, final_end, current_text)
+            if seg.start <= text_start <= seg.end or seg.start <= text_end <= seg.end:
+                speaker_label = speaker
+                break
+        results.append((speaker_label, text_start, text_end, text_str))
 
     return results
 
@@ -287,6 +359,7 @@ def transcribe_videos_to_db(
     conn: sqlite3.Connection,
     whisper_model: whisper.Whisper = None,
     diarization_pipeline: PyannotePipeline = None,
+    export_chunks_after_each_video: bool = False,
 ) -> None:
     videos_to_transcribe = p_query(conn, "videos", "get_videos_to_transcribe", ())
     video_count = len(videos_to_transcribe)
@@ -316,6 +389,8 @@ def transcribe_videos_to_db(
             video_id,
         )
         save_chunks_to_db(conn, chunk_generator, batch_size=100)
+        if export_chunks_after_each_video:
+            export_today_chunk_hits(conn, video_id=video_id)
 
 
 def embed_chunks_in_db(

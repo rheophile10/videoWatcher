@@ -82,8 +82,6 @@ def get_video_urls(
                 video_db_records = video_db_records[:vid_count]
             insert_videos(conn, video_db_records)
             print(f"Scraper {scraper_name}: Found {num_videos} videos since {since}")
-            for vid in video_db_records:
-                print(f" - {dict(vid)}")
             insert_log(
                 conn,
                 "source_check_successful",
@@ -101,9 +99,10 @@ def get_video_urls(
         )
 
 
-def download_videos(conn: sqlite3.Connection, scrapers: Dict) -> None:
+def download_videos(
+    conn: sqlite3.Connection, scrapers: Dict, videos_to_download: List[sqlite3.Row]
+) -> None:
     """Download videos using the scraper's download_videos function."""
-    videos_to_download = get_videos_to_download(conn)
     for row in tqdm(videos_to_download, desc="Downloading videos"):
         scraper_name = row["scraper_name"]
         source_id = row["source_id"]
@@ -139,7 +138,7 @@ def get_videos_in_last_n_days(
     since = datetime.now() - timedelta(days=n)
     scrapers = get_scrapers(conn)
     get_video_urls(conn, scrapers, since, vid_count=vid_count)
-    download_videos(conn, scrapers)
+    return scrapers
 
 
 def get_source_by_scraper_name(

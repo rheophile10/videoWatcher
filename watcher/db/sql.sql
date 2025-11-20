@@ -62,6 +62,17 @@ CREATE TABLE IF NOT EXISTS videos (
     UNIQUE(source_id, video_url)
 );
 CREATE INDEX IF NOT EXISTS idx_videos_published ON videos(published_at);
+-- seed: videos.csv
+-- upsert
+INSERT INTO videos(source_id, video_url, title, description, published_at, seen_at, video_file_path, duration_seconds)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(source_id, video_url) DO UPDATE SET
+    title = excluded.title,
+    description = excluded.description,
+    published_at = excluded.published_at,
+    seen_at = excluded.seen_at,
+    video_file_path = excluded.video_file_path,
+    duration_seconds = excluded.duration_seconds;
 -- upsert_video
 INSERT INTO videos(source_id, video_url, title, description, published_at)
 VALUES (?, ?, ?, ?, ?)
@@ -72,9 +83,9 @@ ON CONFLICT(source_id, video_url) DO UPDATE SET
 -- update_video_downloaded
 UPDATE videos SET video_file_path = ?, duration_seconds = ?, title = ? WHERE id = ?;
 -- get_videos_to_download
-SELECT s.scraper_name, s.id as source_id, v.id as video_id, v.video_url FROM videos v JOIN sources s ON v.source_id = s.id and v.video_file_path IS NULL
+SELECT s.scraper_name, s.id as source_id, v.id as video_id, v.video_url FROM videos v JOIN sources s ON v.source_id = s.id where v.video_file_path IS NULL or v.video_file_path == "";
 -- get_videos_to_transcribe
-SELECT v.source_id, v.id as video_id, v.video_file_path FROM videos v LEFT JOIN chunks c on v.id = c.video_id AND c.video_id IS NULL
+SELECT v.source_id, v.id as video_id, v.video_file_path FROM videos v LEFT JOIN chunks c on v.id = c.video_id where c.video_id IS NULL and v.video_file_path IS NOT NULL and v.video_file_path != "";
 -- videos_fetched_today
 SELECT 
     v.id                    AS videoId,
@@ -153,6 +164,36 @@ WITH matches AS (
     FROM chunk_fts f
     JOIN chunks c ON f.rowid = c.id
     JOIN videos v ON c.video_id = v.id
+    WHERE f.text MATCH ?
+        AND v.seen_at >= ?
+),
+context AS (
+    SELECT DISTINCT c2.id
+    FROM matches m
+    JOIN chunks c2 ON c2.video_id = m.video_id
+    WHERE ABS(c2.id - m.chunk_id) <= ?
+)
+SELECT 
+    v.id          AS videoId,
+    v.title       AS videoTitle,
+    v.video_url   AS videoUrl,
+    c.speaker_id  AS speakerId,
+    c.start_sec   AS start_sec,
+    c.end_sec     AS end_sec,
+    c.text        AS text,
+    (m.chunk_id IS NOT NULL) AS is_match
+FROM chunks c
+JOIN videos v ON c.video_id = v.id
+LEFT JOIN matches m ON c.id = m.chunk_id
+WHERE c.id IN (SELECT id FROM context)
+    AND v.seen_at >= ?
+ORDER BY v.id, c.start_sec;
+-- export_chunk_hits_by_video_id
+WITH matches AS (
+    SELECT c.id AS chunk_id, c.video_id
+    FROM chunk_fts f
+    JOIN chunks c ON f.rowid = c.id
+    JOIN videos v ON c.video_id = v.id and v.id = ?
     WHERE f.text MATCH ?
         AND v.seen_at >= ?
 ),

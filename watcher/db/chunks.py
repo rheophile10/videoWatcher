@@ -26,15 +26,27 @@ def export_today_chunk_hits(
     since: datetime = datetime.combine(datetime.today(), datetime.min.time()),
     contest_chunks: int = 5,
     keywords_fts_query: str = "gun OR firearm OR rifle",
+    video_id: int = None,
 ) -> List[sqlite3.Row]:
     """Export chunks with keyword hits from videos seen today."""
     since_str = since.strftime("%Y-%m-%d %H:%M:%S")
-    rows = p_query(
-        conn,
-        "chunks",
-        "export_today_chunks_with_video_info",
-        params=(keywords_fts_query, since_str, contest_chunks, since_str),
-    )
+    if video_id:
+        rows = p_query(
+            conn,
+            "chunks",
+            "export_chunk_hits_by_video_id",
+            params=(video_id, keywords_fts_query, since_str, contest_chunks, since_str),
+        )
+        rows_to_csv(rows, f"chunk_hits_video_{video_id}")
+        return rows
+    else:
+        rows = p_query(
+            conn,
+            "chunks",
+            "export_today_chunk_hits",
+            params=(keywords_fts_query, since_str, contest_chunks, since_str),
+        )
+
     rows_to_csv(rows, "today_chunk_hits")
     return rows
 

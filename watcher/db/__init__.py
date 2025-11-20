@@ -182,13 +182,33 @@ def delete(conn: sqlite3.Connection, table: str, rows: List[Tuple]) -> None:
 
 def rows_to_csv(rows: List[sqlite3.Row], report_name: str) -> Path:
     if not rows:
-        raise ValueError("No rows to export")
+        print(f"No rows to export for report '{report_name}'")
+        return
 
     path = (
         EXPORTS_PATH
         / f"export_{report_name}{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     )
     rows = [dict(row) for row in rows]
+    keys = rows[0].keys()
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=keys)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"Exported {len(rows)} rows → {path.absolute()}")
+    return path
+
+
+def dicts_to_csv(rows: List[Dict[str, Any]], report_name: str) -> Path:
+    if not rows:
+        print(f"No rows to export for report '{report_name}'")
+        return
+
+    path = (
+        EXPORTS_PATH
+        / f"export_{report_name}{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    )
     keys = rows[0].keys()
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=keys)

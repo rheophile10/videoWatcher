@@ -92,7 +92,7 @@ def get_episode_details(episode_id: str, source_id: int) -> dict:
         data["page"]["details"]["videoUrl"],
         data["page"]["details"]["title_en_t"],
         data["page"]["details"]["description_en_t"],
-        datetime.fromisoformat(data["page"]["details"]["liveDateTime"][:10]),
+        None,
     )
     return db_record
 
