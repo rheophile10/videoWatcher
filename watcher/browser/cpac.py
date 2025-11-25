@@ -14,7 +14,9 @@ from watcher.browser.utils import download_video
 SCRAPER_NAME = "cpac"
 
 
-async def get_recent_episode_ids(days_back: int = 2, max_pages: int = 5) -> set[str]:
+async def get_recent_episode_ids(
+    days_back: int = 2, max_pages: int = 5, program_id: int = 6
+) -> set[str]:
     """Scrape CPAC for recent episode IDs within the given days_back."""
     seen_ids = set()
     cutoff_date = (datetime.now() - timedelta(days=days_back)).date()
@@ -23,7 +25,8 @@ async def get_recent_episode_ids(days_back: int = 2, max_pages: int = 5) -> set[
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
         await page.goto(
-            "https://www.cpac.ca/search?programId=6&sort=desc", wait_until="networkidle"
+            f"https://www.cpac.ca/search?programId={program_id}&sort=desc",
+            wait_until="networkidle",
         )
         await page.wait_for_selector(".list-main__item", timeout=15000)
 
@@ -87,6 +90,7 @@ def get_episode_details(episode_id: str, source_id: int) -> dict:
     r = requests.get(url, params=params, timeout=15)
     r.raise_for_status()
     data = r.json()
+    tags = data["page"]["details"].get("tags", [])
     db_record = (
         source_id,
         data["page"]["details"]["videoUrl"],
@@ -94,18 +98,49 @@ def get_episode_details(episode_id: str, source_id: int) -> dict:
         data["page"]["details"]["description_en_t"],
         None,
     )
-    return db_record
+    return db_record, tags
+
+
+async def get_all_episode_ids(
+    days_back: int, program_ids: list[int], max_pages: int = 5
+) -> set[str]:
+    """Get distinct episode IDs from multiple program IDs."""
+    tasks = [
+        get_recent_episode_ids(days_back=days_back, max_pages=max_pages, program_id=pid)
+        for pid in program_ids
+    ]
+    results = await asyncio.gather(*tasks)
+    all_ids = set()
+    for ids in results:
+        all_ids.update(ids)
+    return all_ids
 
 
 def videos_since(since: datetime, source_id: int) -> list[tuple[dict, str]]:
     """Get videos since a given datetime."""
+    program_ids = [
+        51,  # hoc proceedings"
+        7,  # in committee from the house of commons"
+        19,  # hoc question period
+        63,  # senate proceedings
+        82,  # senate question period
+        6,  # headline politics
+        22,  # scrums
+    ]
+    # 66110262 public safety and security tag id
+
     episode_ids = asyncio.run(
-        get_recent_episode_ids(days_back=(datetime.now() - since).days + 1)
+        get_all_episode_ids(
+            days_back=(datetime.now() - since).days + 1, program_ids=program_ids
+        )
     )
     videos = []
+    distinct_tags = dict()
     for eid in episode_ids:
-        db_record = get_episode_details(eid, source_id)
+        db_record, tags = get_episode_details(eid, source_id)
         videos.append((db_record, eid))
+        for tag in tags:
+            distinct_tags[tag] = distinct_tags.get(tag, 0) + 1
     return videos
 
 
