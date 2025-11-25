@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 import os
 from pydub import AudioSegment
 
+from watcher.llm.resources import register_loaded_model
 from watcher.db import batched_insert, p_query, dicts_to_csv
 
 load_dotenv()
@@ -32,7 +33,7 @@ def prepare_transcription_model(
     device: str = DEVICE,
     download_root: Path = MODELS_FOLDER / "whisper",
 ) -> whisper.Whisper:
-    print(f"Loading Whisper model: {model_name}...")
+    register_loaded_model(f"whisper:{model_name}", estimated_gb=2.5)
     model = whisper.load_model(
         model_name, device=device, download_root=str(download_root)
     )
@@ -43,7 +44,7 @@ def prepare_diarization_pipeline(
     device: str = DEVICE,
     auth_token: str = HF_TOKEN,
 ) -> PyannotePipeline:
-    print("Loading PyAnnote speaker diarization model...")
+    register_loaded_model("pyannote/speaker-diarization-3.1", estimated_gb=1.1)
     pipeline = PyannotePipeline.from_pretrained(
         "pyannote/speaker-diarization-3.1", token=auth_token
     )

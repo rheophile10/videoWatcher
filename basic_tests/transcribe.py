@@ -29,6 +29,8 @@ def main():
         scrapers = get_videos_in_last_n_days(conn, n=2, vid_count=5)
         # gets the videos from sqlite
         videos_to_download = get_videos_to_download(conn)
+        # a report for what videos were downloaded
+        _ = get_videos_fetched_today(conn)
         # loading a model for transcription locally takes a minute
         whisper_model = prepare_transcription_model()
         # diarization is figuring out who was saying what but its buggy right now. This also loads a model

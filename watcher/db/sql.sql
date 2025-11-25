@@ -62,7 +62,6 @@ CREATE TABLE IF NOT EXISTS videos (
     UNIQUE(source_id, video_url)
 );
 CREATE INDEX IF NOT EXISTS idx_videos_published ON videos(published_at);
--- seed videos.csv
 -- upsert
 INSERT INTO videos(source_id, video_url, title, description, published_at, seen_at, video_file_path, duration_seconds)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
